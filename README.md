@@ -23,8 +23,20 @@ import type { LogLevel, Logger, LogData } from '@almadar/logger';
 import {
   createLogger,
   generateCorrelationId,
+  // runtime tuning
+  getLogLevel,
+  setLogLevel,
+  setNamespaceLevel,
+  getNamespaceLevel,
+  getNamespaceLevels,
+  isLogLevelEnabled,
   getRuntimeNamespaceFilter,
   setRuntimeNamespaceFilter,
+  // persistence + observation
+  enableLogPersistence,
+  disableLogPersistence,
+  clearLogPersistence,
+  onLogConfigChange,
 } from '@almadar/logger';
 ```
 
@@ -112,3 +124,68 @@ log.debug('processEvent', () => ({ event, payload: JSON.stringify(payload) }));
 **When in doubt, use DEBUG.** Promoting a DEBUG call to INFO later is
 trivial; demoting an INFO call after it's already shipped means the
 log volume spike was already on someone's bill.
+
+## Consumer-side tuning
+
+Six knobs, in priority order at every log call:
+
+1. **`setNamespaceLevel(pattern, level)`** — per-namespace priority
+   floor. Use to bring a noisy namespace below the global threshold,
+   or to enable just one namespace at DEBUG while everything else
+   stays at WARN. Pattern accepts exact namespaces or `prefix:*`.
+   ```ts
+   setNamespaceLevel('almadar:runtime:sm', 'DEBUG');   // only this
+   setNamespaceLevel('almadar:ui:flow-canvas', 'WARN'); // quiet a noisy one
+   setNamespaceLevel('almadar:runtime:*', null);        // clear override
+   ```
+
+2. **`setLogLevel(level)`** — global priority floor at runtime. The
+   env-based `LOG_LEVEL` only sets the *initial* value; this lets you
+   flip it from a settings UI or a feature flag without restarting.
+   ```ts
+   setLogLevel('DEBUG'); // app-wide turn on
+   ```
+
+3. **`setRuntimeNamespaceFilter(pattern)`** — the namespace allowlist
+   (DEBUG/INFO only — WARN/ERROR always pass). Same semantics as
+   `globalThis.__ALMADAR_DEBUG__`.
+
+4. **`enableLogPersistence(key?)`** — wires the above three knobs to
+   `localStorage` so dev toggles survive page reloads. Idempotent;
+   browser-only (no-op in Node).
+   ```ts
+   // app/main.tsx — once at entry
+   enableLogPersistence();   // key defaults to 'almadar:logger:prefs'
+   ```
+
+5. **`isLogLevelEnabled(level, namespace)`** — read-only gate check.
+   Use to skip an even-heavier diagnostic when the call site wouldn't
+   fire anyway:
+   ```ts
+   if (isLogLevelEnabled('DEBUG', 'almadar:ui:flow')) {
+     log.debug('expensive', deepProbeOfReactFiberTree());
+   }
+   ```
+
+6. **`onLogConfigChange(fn)`** — observer for any of the above
+   changing. Returns an unsubscribe. Use it to build a debug panel
+   that reflects current state.
+
+### Recommended consumer setup (apps/builder, playground, etc.)
+
+```ts
+// once at app entry — restores stored prefs and persists future flips
+import { enableLogPersistence, setNamespaceLevel } from '@almadar/logger';
+enableLogPersistence();
+
+// e.g. silence one chatty namespace by default; users can re-enable from devtools
+setNamespaceLevel('almadar:runtime:sm', 'WARN');
+```
+
+```ts
+// settings UI — flip from a toggle
+import { setLogLevel } from '@almadar/logger';
+function onDebugModeToggle(enabled: boolean) {
+  setLogLevel(enabled ? 'DEBUG' : 'INFO');
+}
+```

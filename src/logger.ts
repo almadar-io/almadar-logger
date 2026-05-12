@@ -3,9 +3,14 @@
  *
  * Layer 1 (compile-time): `MIN_PRIORITY` derived from `NODE_ENV` + `LOG_LEVEL`.
  *                         Production defaults to WARN, dev to DEBUG.
+ *                         Mutable at runtime via `setLogLevel`.
  * Layer 2 (env):          `ALMADAR_DEBUG="ns1,ns2:*"` namespace allowlist.
  * Layer 3 (runtime):      `globalThis.__ALMADAR_DEBUG__` re-read on each call;
  *                         overrides layer 2 when set.
+ *
+ * Per-namespace level overrides (`setNamespaceLevel`) compose between
+ * layers 1 and 2: a namespace can carry its own minimum priority that
+ * takes precedence over the global level.
  *
  * Data is typed via `LogMeta` from `@almadar/core` — strict, recursive,
  * no `unknown`. The `LogData` alias also accepts a `() => LogMeta` thunk
@@ -16,6 +21,7 @@
 import type { LogMeta } from '@almadar/core';
 import { envGet } from './env.js';
 import { getRuntimeNamespaceFilter } from './runtime-override.js';
+import { notifyLogConfigChange } from './observers.js';
 
 export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
 
@@ -32,10 +38,39 @@ export interface Logger {
 const LEVEL_PRIORITY: Record<LogLevel, number> = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 };
 
 const NODE_ENV = envGet('NODE_ENV') ?? 'development';
-const CONFIGURED_LEVEL = (
+const INITIAL_LEVEL = (
   envGet('LOG_LEVEL') ?? (NODE_ENV === 'production' ? 'warn' : 'debug')
 ).toUpperCase() as LogLevel;
-const MIN_PRIORITY = LEVEL_PRIORITY[CONFIGURED_LEVEL] ?? 0;
+
+let currentLevel: LogLevel = LEVEL_PRIORITY[INITIAL_LEVEL] !== undefined ? INITIAL_LEVEL : 'DEBUG';
+const namespaceLevels = new Map<string, LogLevel>();
+
+export function getLogLevel(): LogLevel {
+  return currentLevel;
+}
+
+export function setLogLevel(level: LogLevel): void {
+  if (LEVEL_PRIORITY[level] === undefined) return;
+  currentLevel = level;
+  notifyLogConfigChange();
+}
+
+export function setNamespaceLevel(namespace: string, level: LogLevel | null): void {
+  if (level === null) {
+    namespaceLevels.delete(namespace);
+  } else if (LEVEL_PRIORITY[level] !== undefined) {
+    namespaceLevels.set(namespace, level);
+  }
+  notifyLogConfigChange();
+}
+
+export function getNamespaceLevel(namespace: string): LogLevel | undefined {
+  return namespaceLevels.get(namespace);
+}
+
+export function getNamespaceLevels(): ReadonlyMap<string, LogLevel> {
+  return namespaceLevels;
+}
 
 const ENV_FILTER_RAW = envGet('ALMADAR_DEBUG') ?? '';
 const ENV_FILTER = ENV_FILTER_RAW
@@ -67,6 +102,27 @@ function namespaceAllowed(namespace: string): boolean {
   return matchesPatterns(namespace, ENV_FILTER);
 }
 
+function effectiveMinPriority(namespace: string): number {
+  // Per-namespace override beats global. Exact match first, then
+  // prefix-wildcard match (`almadar:ui:*` covers `almadar:ui:flow-canvas`).
+  const exact = namespaceLevels.get(namespace);
+  if (exact !== undefined) return LEVEL_PRIORITY[exact];
+  for (const [pattern, level] of namespaceLevels) {
+    if (pattern.endsWith(':*') && namespace.startsWith(pattern.slice(0, -1))) {
+      return LEVEL_PRIORITY[level];
+    }
+  }
+  return LEVEL_PRIORITY[currentLevel];
+}
+
+export function isLogLevelEnabled(level: LogLevel, namespace: string): boolean {
+  if (LEVEL_PRIORITY[level] < effectiveMinPriority(namespace)) return false;
+  if (level === 'DEBUG' || level === 'INFO') {
+    return namespaceAllowed(namespace);
+  }
+  return true;
+}
+
 function resolveData(data: LogData | undefined): LogMeta | undefined {
   if (data === undefined) return undefined;
   if (typeof data === 'function') return data();
@@ -92,7 +148,7 @@ export function createLogger(namespace: string): Logger {
   const prefix = `[${namespace}]`;
 
   const dispatch = (level: LogLevel, message: string, data?: LogData, cid?: string): void => {
-    if (LEVEL_PRIORITY[level] < MIN_PRIORITY) return;
+    if (LEVEL_PRIORITY[level] < effectiveMinPriority(namespace)) return;
     if ((level === 'DEBUG' || level === 'INFO') && !namespaceAllowed(namespace)) return;
     const resolved = resolveData(data);
     emit(level, prefix, message, attachCorrelation(resolved, cid));

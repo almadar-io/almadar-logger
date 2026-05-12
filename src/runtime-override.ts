@@ -16,6 +16,8 @@
  *                       `'almadar:runtime:*'`, exact match).
  */
 
+import { notifyLogConfigChange } from './observers.js';
+
 declare global {
   var __ALMADAR_DEBUG__: string | undefined;
 }
@@ -32,4 +34,5 @@ export function setRuntimeNamespaceFilter(value: string | undefined): void {
   } else {
     g.__ALMADAR_DEBUG__ = value;
   }
+  notifyLogConfigChange();
 }

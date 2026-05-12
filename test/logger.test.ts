@@ -238,4 +238,179 @@ describe('createLogger', () => {
       restore();
     });
   });
+
+  describe('setLogLevel (runtime priority change)', () => {
+    it('flips the global priority floor at runtime', async () => {
+      const { createLogger, setLogLevel, restore } = await freshImport({ NODE_ENV: 'production' });
+      const log = createLogger('almadar:test');
+      // Default in production is WARN — INFO is filtered out.
+      log.info('first');
+      expect(spies.info).not.toHaveBeenCalled();
+      setLogLevel('DEBUG');
+      log.info('second');
+      expect(spies.info).toHaveBeenCalledWith('[almadar:test]', 'second', '');
+      restore();
+    });
+
+    it('ignores invalid levels (typed off but still defensive)', async () => {
+      const { setLogLevel, getLogLevel, restore } = await freshImport({ NODE_ENV: 'development' });
+      const before = getLogLevel();
+      // @ts-expect-error — testing runtime defense
+      setLogLevel('TRACE');
+      expect(getLogLevel()).toBe(before);
+      restore();
+    });
+  });
+
+  describe('setNamespaceLevel (per-namespace override)', () => {
+    it('lets one namespace fire DEBUG while global is WARN', async () => {
+      const { createLogger, setNamespaceLevel, restore } = await freshImport({ NODE_ENV: 'production' });
+      setNamespaceLevel('almadar:runtime:sm', 'DEBUG');
+      const sm = createLogger('almadar:runtime:sm');
+      const ui = createLogger('almadar:ui:flow');
+      sm.debug('sm-fires');
+      ui.debug('ui-skipped');
+      expect(spies.debug).toHaveBeenCalledWith('[almadar:runtime:sm]', 'sm-fires', '');
+      expect(spies.debug).toHaveBeenCalledTimes(1);
+      restore();
+    });
+
+    it('supports prefix-wildcard patterns', async () => {
+      const { createLogger, setNamespaceLevel, restore } = await freshImport({ NODE_ENV: 'production' });
+      setNamespaceLevel('almadar:runtime:*', 'DEBUG');
+      const sm = createLogger('almadar:runtime:sm');
+      const eb = createLogger('almadar:runtime:eventbus');
+      const ui = createLogger('almadar:ui:flow');
+      sm.debug('sm-fires');
+      eb.debug('eb-fires');
+      ui.debug('ui-skipped');
+      expect(spies.debug).toHaveBeenCalledTimes(2);
+      restore();
+    });
+
+    it('clears the override when level=null', async () => {
+      const { createLogger, setNamespaceLevel, restore } = await freshImport({ NODE_ENV: 'production' });
+      setNamespaceLevel('almadar:runtime:sm', 'DEBUG');
+      setNamespaceLevel('almadar:runtime:sm', null);
+      const sm = createLogger('almadar:runtime:sm');
+      sm.debug('back-to-global');
+      expect(spies.debug).not.toHaveBeenCalled();
+      restore();
+    });
+
+    it('can tighten a namespace below the global level', async () => {
+      const { createLogger, setNamespaceLevel, restore } = await freshImport({ NODE_ENV: 'development' });
+      setNamespaceLevel('almadar:ui:flow', 'WARN');
+      const ui = createLogger('almadar:ui:flow');
+      ui.info('noisy-info-suppressed');
+      ui.warn('warn-still-fires');
+      expect(spies.info).not.toHaveBeenCalled();
+      expect(spies.warn).toHaveBeenCalledWith('[almadar:ui:flow]', 'warn-still-fires', '');
+      restore();
+    });
+  });
+
+  describe('isLogLevelEnabled', () => {
+    it('reports whether a level would fire for a namespace', async () => {
+      const { isLogLevelEnabled, setNamespaceLevel, restore } = await freshImport({ NODE_ENV: 'production' });
+      expect(isLogLevelEnabled('DEBUG', 'almadar:runtime:sm')).toBe(false);
+      expect(isLogLevelEnabled('ERROR', 'almadar:runtime:sm')).toBe(true);
+      setNamespaceLevel('almadar:runtime:sm', 'DEBUG');
+      expect(isLogLevelEnabled('DEBUG', 'almadar:runtime:sm')).toBe(true);
+      restore();
+    });
+
+    it('reflects the namespace filter for DEBUG/INFO', async () => {
+      const { isLogLevelEnabled, setRuntimeNamespaceFilter, restore } =
+        await freshImport({ NODE_ENV: 'development' });
+      setRuntimeNamespaceFilter('almadar:runtime:*');
+      expect(isLogLevelEnabled('DEBUG', 'almadar:runtime:sm')).toBe(true);
+      expect(isLogLevelEnabled('DEBUG', 'almadar:ui:flow')).toBe(false);
+      // WARN/ERROR always pass the filter.
+      expect(isLogLevelEnabled('WARN', 'almadar:ui:flow')).toBe(true);
+      setRuntimeNamespaceFilter(undefined);
+      restore();
+    });
+  });
+
+  describe('onLogConfigChange', () => {
+    it('fires the observer when filter or level changes', async () => {
+      const { onLogConfigChange, setLogLevel, setRuntimeNamespaceFilter, setNamespaceLevel, restore } =
+        await freshImport({ NODE_ENV: 'development' });
+      let callCount = 0;
+      const unsub = onLogConfigChange(() => { callCount++; });
+      setLogLevel('WARN');
+      setRuntimeNamespaceFilter('almadar:test');
+      setNamespaceLevel('almadar:x', 'DEBUG');
+      expect(callCount).toBe(3);
+      unsub();
+      setLogLevel('DEBUG');
+      expect(callCount).toBe(3);
+      setRuntimeNamespaceFilter(undefined);
+      restore();
+    });
+  });
+
+  describe('enableLogPersistence', () => {
+    async function withLocalStorage<T>(fn: () => Promise<T>): Promise<T> {
+      const store: Record<string, string> = {};
+      const orig = (globalThis as { localStorage?: Storage }).localStorage;
+      (globalThis as { localStorage?: Storage }).localStorage = {
+        getItem: (k: string) => (k in store ? store[k] : null),
+        setItem: (k: string, v: string) => { store[k] = v; },
+        removeItem: (k: string) => { delete store[k]; },
+        clear: () => { for (const k of Object.keys(store)) delete store[k]; },
+        key: (i: number) => Object.keys(store)[i] ?? null,
+        get length() { return Object.keys(store).length; },
+      };
+      try {
+        return await fn();
+      } finally {
+        if (orig === undefined) {
+          delete (globalThis as { localStorage?: Storage }).localStorage;
+        } else {
+          (globalThis as { localStorage?: Storage }).localStorage = orig;
+        }
+      }
+    }
+
+    it('persists level + filter + namespace overrides on change', async () => {
+      await withLocalStorage(async () => {
+        const {
+          enableLogPersistence,
+          setLogLevel,
+          setRuntimeNamespaceFilter,
+          setNamespaceLevel,
+          restore,
+        } = await freshImport({ NODE_ENV: 'development' });
+        enableLogPersistence('test:prefs');
+        setLogLevel('WARN');
+        setRuntimeNamespaceFilter('almadar:runtime:*');
+        setNamespaceLevel('almadar:ui:flow', 'ERROR');
+        const stored = (globalThis as { localStorage: Storage }).localStorage.getItem('test:prefs');
+        expect(stored).not.toBeNull();
+        const parsed = JSON.parse(stored as string) as { level: string; namespaceFilter: string; namespaceLevels: Record<string, string> };
+        expect(parsed.level).toBe('WARN');
+        expect(parsed.namespaceFilter).toBe('almadar:runtime:*');
+        expect(parsed.namespaceLevels['almadar:ui:flow']).toBe('ERROR');
+        restore();
+      });
+    });
+
+    it('restores stored prefs on enable', async () => {
+      await withLocalStorage(async () => {
+        (globalThis as { localStorage: Storage }).localStorage.setItem(
+          'test:prefs',
+          JSON.stringify({ level: 'INFO', namespaceFilter: 'almadar:x', namespaceLevels: { 'almadar:y': 'WARN' } }),
+        );
+        const { enableLogPersistence, getLogLevel, getRuntimeNamespaceFilter, getNamespaceLevel, restore } =
+          await freshImport({ NODE_ENV: 'production' });
+        enableLogPersistence('test:prefs');
+        expect(getLogLevel()).toBe('INFO');
+        expect(getRuntimeNamespaceFilter()).toBe('almadar:x');
+        expect(getNamespaceLevel('almadar:y')).toBe('WARN');
+        restore();
+      });
+    });
+  });
 });
