@@ -1,0 +1,56 @@
+{
+  "name": "@almadar/logger",
+  "version": "1.0.0",
+  "description": "Shared logging gate for @almadar/* packages — namespace-based, three-layer gated, with runtime override.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "build:watch": "tsup --watch",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest --run",
+    "prepublishOnly": "pnpm run build",
+    "prepare": "git config core.hooksPath .githooks"
+  },
+  "dependencies": {
+    "@almadar/core": ">=7.12.0"
+  },
+  "devDependencies": {
+    "@almadar/eslint-plugin": ">=2.7.0",
+    "@typescript-eslint/parser": "8.56.0",
+    "eslint": "10.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/almadar-io/almadar-logger.git",
+    "directory": "docs/packages/logger"
+  },
+  "license": "BSL-1.1",
+  "keywords": [
+    "almadar",
+    "logger",
+    "logging",
+    "structured-logging"
+  ],
+  "homepage": "https://github.com/almadar-io/almadar#readme"
+}
