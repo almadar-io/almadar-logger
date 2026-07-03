@@ -1,6 +1,6 @@
 {
   "name": "@almadar/logger",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Shared logging gate for @almadar/* packages — namespace-based, three-layer gated, with runtime override.",
   "type": "module",
   "main": "./dist/index.js",
@@ -44,7 +44,8 @@
     "eslint": "10.0.0",
     "tsup": "^8.0.0",
     "typescript": "^5.7.0",
-    "vitest": "^2.1.0"
+    "vitest": "^2.1.0",
+    "turbo": "^2.8.17"
   },
   "repository": {
     "type": "git",
@@ -58,5 +59,6 @@
     "logging",
     "structured-logging"
   ],
-  "homepage": "https://github.com/almadar-io/almadar#readme"
+  "homepage": "https://github.com/almadar-io/almadar#readme",
+  "packageManager": "pnpm@10.30.3"
 }
