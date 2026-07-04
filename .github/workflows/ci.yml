@@ -31,7 +31,7 @@ jobs:
         run: pnpm build
 
       - name: Test
-        run: pnpm test --if-present
+        run: pnpm run --if-present test
 
       - name: Lint
         run: pnpm exec eslint --no-warn-ignored --max-warnings 0 src/
