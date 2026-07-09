@@ -4,13 +4,28 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  react: 19.2.3
+  react-dom: 19.2.3
+  '@types/react': '>=19.0.0'
+  '@types/react-dom': '>=19.0.0'
+  zustand: 4.5.7
+  react-native-reanimated: 4.1.1
+  react-native-worklets: 0.5.1
+  react-syntax-highlighter: ^16.1.0
+  '@react-three/fiber': 9.5.0
+  '@types/three': 0.160.0
+  '@almadar/std': ^16.103.2
+  '@almadar/ui': ^5.93.0
+  '@almadar/core': ^10.24.0
+
 importers:
 
   .:
     dependencies:
       '@almadar/core':
-        specifier: '>=7.13.0'
-        version: 9.10.3
+        specifier: ^10.24.0
+        version: link:../almadar-core
     devDependencies:
       '@almadar/eslint-plugin':
         specifier: '>=2.7.0'
@@ -39,16 +54,10 @@ importers:
 
 packages:
 
-  '@almadar/core@9.10.3':
-    resolution: {integrity: sha512-DAvWHt4wGV0kbbOEWWHAshCMxxE9ri3KrpgtywpARliSSId6ZMlUmXOqj38ztGknjkf9MbnGoi1f7q+FskhGJw==}
-
   '@almadar/eslint-plugin@2.8.2':
     resolution: {integrity: sha512-iQGH5MdsfcEPGUeImgS3XBWLfBRc0uO9+0Kyy87WQf/nc4hUoAEPxov5C/JAYe1tLoL34dLBIyKDm/SFeYPBsA==}
     peerDependencies:
       eslint: '>=8.0.0'
-
-  '@almadar/patterns@2.38.4':
-    resolution: {integrity: sha512-bH6+FSZJjLkDysXihrXNN7ZKHVqYV2WMtzWUeotmauMQDSOgbwbgOPRVTlTD5gH5+0eSzlfyDEaZ6cWoW67rTQ==}
 
   '@esbuild/aix-ppc64@0.21.5':
     resolution: {integrity: sha512-1SDgH6ZSPTlggy1yI6+Dbkiz8xzpHJEVAlF/AM1tHPLsf5STom9rwtjE4hKAF20FfXXNTFqEYXyJNWh1GiZedQ==}
@@ -1228,24 +1237,12 @@ packages:
     resolution: {integrity: sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q==}
     engines: {node: '>=10'}
 
-  zod@3.25.76:
-    resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
-
 snapshots:
-
-  '@almadar/core@9.10.3':
-    dependencies:
-      '@almadar/patterns': 2.38.4
-      zod: 3.25.76
 
   '@almadar/eslint-plugin@2.8.2(eslint@10.0.0)':
     dependencies:
       eslint: 10.0.0
       jsonc-eslint-parser: 3.1.0
-
-  '@almadar/patterns@2.38.4':
-    dependencies:
-      '@almadar/core': 9.10.3
 
   '@esbuild/aix-ppc64@0.21.5':
     optional: true
@@ -2241,5 +2238,3 @@ snapshots:
   word-wrap@1.2.5: {}
 
   yocto-queue@0.1.0: {}
-
-  zod@3.25.76: {}
