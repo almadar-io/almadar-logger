@@ -12,11 +12,28 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { performance } from 'node:perf_hooks';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { Logger, LogData } from './logger.js';
+import { envGet } from './env.js';
 
 /** name → accumulated milliseconds for the current request. */
 export type TimingStore = Map<string, number>;
 
-export const timingStore = new AsyncLocalStorage<TimingStore>();
+// Use globalThis so the AsyncLocalStorage is shared across duplicated module
+// instances (pnpm hoists @almadar/logger separately for the app and its deps).
+// Without this, profile() calls from a dependency don't reach the timing store
+// created by timingMiddleware in the app's own logger copy.
+const globalKey = Symbol.for('@almadar/logger/timingStore');
+function getTimingStore(): AsyncLocalStorage<TimingStore> {
+  if (!(globalThis as Record<symbol, unknown>)[globalKey]) {
+    (globalThis as Record<symbol, unknown>)[globalKey] = new AsyncLocalStorage<TimingStore>();
+  }
+  return (globalThis as Record<symbol, AsyncLocalStorage<TimingStore>>)[globalKey];
+}
+
+export const timingStore = getTimingStore();
+
+/** Profiling is DEV-only — zero overhead (pure passthrough) in production. */
+const PROFILING_ENABLED = envGet('NODE_ENV') !== 'production';
 
 /** Add `ms` under `name` into the active request store. No-op off the request path. */
 export function record(name: string, ms: number): void {
@@ -50,6 +67,35 @@ export function serializeServerTiming(
     parts.push(`${name.replace(NON_TOKEN, '_')};dur=${Math.round(ms * 10) / 10}`);
   }
   return parts.join(', ');
+}
+
+/**
+ * Profile an async phase for BOTH observability surfaces at once: accumulates
+ * wall-clock duration into the active Server-Timing store (when `timingMiddleware`
+ * is installed) AND emits a structured `[PROFILE]` log line via the provided
+ * logger. `meta` is merged into the log data so callers can attach `operation`,
+ * `graphId`, `model`, etc. — anything grep-able.
+ *
+ * DEV-only: in production this is a zero-overhead passthrough (no `performance.now`,
+ * no log dispatch). Off the request path (no middleware), `record` is a no-op
+ * but the log line still fires, so this works in background jobs, tests, and
+ * CLI tools too.
+ */
+export async function profile<T>(
+  logger: Pick<Logger, 'debug'>,
+  phase: string,
+  fn: () => Promise<T> | T,
+  meta?: LogData,
+): Promise<T> {
+  if (!PROFILING_ENABLED) return fn();
+  const start = performance.now();
+  try {
+    return await fn();
+  } finally {
+    const elapsedMs = Math.round((performance.now() - start) * 10) / 10;
+    record(phase, elapsedMs);
+    logger.debug(`[PROFILE] ${phase}`, { elapsedMs, ...meta });
+  }
 }
 
 /**

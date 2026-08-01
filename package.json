@@ -1,6 +1,6 @@
 {
   "name": "@almadar/logger",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "description": "Shared logging gate for @almadar/* packages — namespace-based, three-layer gated, with runtime override.",
   "type": "module",
   "main": "./dist/index.js",
@@ -35,12 +35,12 @@
     "prepare": "git config core.hooksPath .githooks"
   },
   "dependencies": {
-    "@almadar/core": "^10.34.0"
+    "@almadar/core": "^10.49.0"
   },
   "devDependencies": {
     "@almadar/eslint-plugin": "^2.15.0",
     "@types/node": "^22.0.0",
-    "@typescript-eslint/parser": "8.56.0",
+    "@typescript-eslint/parser": "8.65.0",
     "eslint": "10.0.0",
     "tsup": "^8.0.0",
     "vitest": "^2.1.0",
