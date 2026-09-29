@@ -1,4 +1,4 @@
-export type { LogLevel, Logger, LogData } from './logger.js';
+export type { LogLevel, Logger, LogData, LogFormat, LogOutput } from './logger.js';
 export {
   createLogger,
   generateCorrelationId,
@@ -8,6 +8,9 @@ export {
   getNamespaceLevel,
   getNamespaceLevels,
   isLogLevelEnabled,
+  configureLogOutput,
+  getLogOutput,
+  timeCall,
 } from './logger.js';
 export {
   getRuntimeNamespaceFilter,

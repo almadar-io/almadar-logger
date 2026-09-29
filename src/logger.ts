@@ -18,7 +18,7 @@
  * hot paths can defer payload construction.
  */
 
-import type { LogMeta } from '@almadar/core';
+import type { CallRecord, JsonObject, JsonValue, LogContext, LogMeta, LogMetaValue, LogSeverity, StructuredLogEntry } from '@almadar/core';
 import { envGet } from './env.js';
 import { getRuntimeNamespaceFilter } from './runtime-override.js';
 import { notifyLogConfigChange } from './observers.js';
@@ -33,6 +33,23 @@ export interface Logger {
   info(message: string, data?: LogData, correlationId?: string): void;
   warn(message: string, data?: LogData, correlationId?: string): void;
   error(message: string, data?: LogData, correlationId?: string): void;
+  /** Record one call the app made (a store, an integration, a queue, another server). */
+  call(record: CallRecord): void;
+}
+
+/**
+ * `console` (default): the prefixed console lines. `json`: one Cloud Logging line per entry on
+ * stdout, carrying the deployment context; call records are telemetry there and pass every filter.
+ */
+export type LogFormat = 'console' | 'json';
+
+export interface LogOutput {
+  format: LogFormat;
+  context: LogContext;
+  /** The current request's context, for a process serving many apps; overrides `context` when it returns one. */
+  contextOf?: () => LogContext | undefined;
+  /** Also handed every structured entry (json format), e.g. to keep a local copy per app. */
+  sink?: (entry: StructuredLogEntry) => void;
 }
 
 const LEVEL_PRIORITY: Record<LogLevel, number> = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 };
@@ -134,6 +151,60 @@ function attachCorrelation(data: LogMeta | undefined, cid: string | undefined): 
   return { ...(data ?? {}), cid };
 }
 
+const INITIAL_FORMAT: LogFormat = envGet('ALMADAR_LOG_FORMAT') === 'json' ? 'json' : 'console';
+let output: LogOutput = { format: INITIAL_FORMAT, context: {} };
+
+export function configureLogOutput(next: { format: LogFormat; context?: LogContext; contextOf?: () => LogContext | undefined; sink?: (entry: StructuredLogEntry) => void }): void {
+  output = {
+    format: next.format,
+    context: next.context ?? {},
+    ...(next.contextOf ? { contextOf: next.contextOf } : {}),
+    ...(next.sink ? { sink: next.sink } : {}),
+  };
+}
+
+export function getLogOutput(): LogOutput {
+  return output;
+}
+
+const SEVERITY: Record<LogLevel, LogSeverity> = { DEBUG: 'DEBUG', INFO: 'INFO', WARN: 'WARNING', ERROR: 'ERROR' };
+
+function isMetaList(value: LogMetaValue): value is readonly LogMetaValue[] {
+  return Array.isArray(value);
+}
+
+function toJson(value: LogMetaValue): JsonValue | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
+  if (value instanceof Date) return value.toISOString();
+  if (value instanceof Error) return { name: value.name, message: value.message, ...(value.stack ? { stack: value.stack } : {}) };
+  if (isMetaList(value)) return value.map((item) => toJson(item) ?? null);
+  return metaToJson(value);
+}
+
+function metaToJson(meta: LogMeta): JsonObject {
+  const out: JsonObject = {};
+  for (const [key, value] of Object.entries(meta)) {
+    const json = toJson(value);
+    if (json !== undefined) out[key] = json;
+  }
+  return out;
+}
+
+function emitJson(level: LogLevel, namespace: string, message: string, payload: LogMeta | undefined, call?: CallRecord): void {
+  const entry: StructuredLogEntry = {
+    severity: SEVERITY[level],
+    time: new Date().toISOString(),
+    namespace,
+    message,
+    ...(output.contextOf?.() ?? output.context),
+    ...(payload ? { data: metaToJson(payload) } : {}),
+    ...(call ? { call } : {}),
+  };
+  console.log(JSON.stringify(entry));
+  output.sink?.(entry);
+}
+
 function emit(level: LogLevel, prefix: string, message: string, payload: LogMeta | undefined): void {
   const data: LogMeta | string = payload ?? '';
   switch (level) {
@@ -147,11 +218,25 @@ function emit(level: LogLevel, prefix: string, message: string, payload: LogMeta
 export function createLogger(namespace: string): Logger {
   const prefix = `[${namespace}]`;
 
+  const allowed = (level: LogLevel): boolean =>
+    LEVEL_PRIORITY[level] >= effectiveMinPriority(namespace) && ((level !== 'DEBUG' && level !== 'INFO') || namespaceAllowed(namespace));
+
   const dispatch = (level: LogLevel, message: string, data?: LogData, cid?: string): void => {
-    if (LEVEL_PRIORITY[level] < effectiveMinPriority(namespace)) return;
-    if ((level === 'DEBUG' || level === 'INFO') && !namespaceAllowed(namespace)) return;
-    const resolved = resolveData(data);
-    emit(level, prefix, message, attachCorrelation(resolved, cid));
+    if (!allowed(level)) return;
+    const payload = attachCorrelation(resolveData(data), cid);
+    if (output.format === 'json') emitJson(level, namespace, message, payload);
+    else emit(level, prefix, message, payload);
+  };
+
+  const call = (record: CallRecord): void => {
+    const message = `${record.kind} ${record.service} ${record.op}`;
+    if (output.format === 'json') {
+      emitJson(record.ok ? 'INFO' : 'WARN', namespace, message, undefined, record);
+      return;
+    }
+    if (!allowed('INFO')) return;
+    const { kind, service, op, durationMs, ok, error } = record;
+    emit('INFO', prefix, message, { kind, service, op, durationMs, ok, ...(error !== undefined ? { error } : {}) });
   };
 
   return {
@@ -159,10 +244,24 @@ export function createLogger(namespace: string): Logger {
     info:  (msg, data, cid) => dispatch('INFO', msg, data, cid),
     warn:  (msg, data, cid) => dispatch('WARN', msg, data, cid),
     error: (msg, data, cid) => dispatch('ERROR', msg, data, cid),
+    call,
   };
 }
 
 let _cidCounter = 0;
 export function generateCorrelationId(): string {
   return `evt-${Date.now()}-${++_cidCounter}`;
+}
+
+/** Run `fn` as one call and record it on `logger`: its duration, and its error when it throws (then rethrows). */
+export async function timeCall<T>(logger: Logger, call: Pick<CallRecord, 'kind' | 'service' | 'op'>, fn: () => Promise<T>): Promise<T> {
+  const start = performance.now();
+  try {
+    const result = await fn();
+    logger.call({ ...call, durationMs: performance.now() - start, ok: true });
+    return result;
+  } catch (err) {
+    logger.call({ ...call, durationMs: performance.now() - start, ok: false, error: err instanceof Error ? err.message : String(err) });
+    throw err;
+  }
 }
