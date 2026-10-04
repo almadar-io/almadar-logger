@@ -8,8 +8,8 @@ Every open gap this repo owns lives here. This file is the source of truth; the 
 - **Close by deleting.** Remove the entry in the same commit as the fix. There is no "closed" section; git history is the record.
 - **Cross-repo gaps don't go here.** If fixing it needs another repo, describe it in your report or PR body; the monorepo coordinator files it.
 
-Next code: `G-LOGGER-001`
+Next code: `G-LOGGER-002`
 
 ## Open gaps
 
-_No open gaps._
+- **G-LOGGER-001** — In a browser bundle `env.ts` sees no `process`, so `NODE_ENV` is unknown and the logger starts at DEBUG with every namespace allowed: every `debug`/`info` call formats its data and writes to the console unless the host sets a level (the builder's production client did not until 2026-10-04 — about 1 s of main thread on a 59-orbital world canvas). Decide the browser default (WARN unless a host opts in) — it changes every consumer's dev logging, so it is an owner call. `@almadar/logger` [architectural] — found 2026-10-04 (studio load perf CPU profile); prevention rung: unit test of the default level with no env
