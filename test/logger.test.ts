@@ -19,16 +19,16 @@ function restoreSpies(spies: Spies): void {
   spies.error.mockRestore();
 }
 
-async function freshImport(env: Partial<Record<'NODE_ENV' | 'LOG_LEVEL' | 'ALMADAR_DEBUG', string>>) {
+async function freshImport(env: Partial<Record<'NODE_ENV' | 'LOG_LEVEL' | 'ALMADAR_DEBUG' | 'ALMADAR_LOG_LEVELS', string>>) {
   vi.resetModules();
   const original = { ...process.env };
-  for (const key of ['NODE_ENV', 'LOG_LEVEL', 'ALMADAR_DEBUG'] as const) {
+  for (const key of ['NODE_ENV', 'LOG_LEVEL', 'ALMADAR_DEBUG', 'ALMADAR_LOG_LEVELS'] as const) {
     if (env[key] !== undefined) process.env[key] = env[key];
     else delete process.env[key];
   }
   const mod = await import('../src/index.js');
   const restore = () => {
-    for (const key of ['NODE_ENV', 'LOG_LEVEL', 'ALMADAR_DEBUG'] as const) {
+    for (const key of ['NODE_ENV', 'LOG_LEVEL', 'ALMADAR_DEBUG', 'ALMADAR_LOG_LEVELS'] as const) {
       if (original[key] !== undefined) process.env[key] = original[key];
       else delete process.env[key];
     }
@@ -347,6 +347,78 @@ describe('createLogger', () => {
       setLogLevel('DEBUG');
       expect(callCount).toBe(3);
       setRuntimeNamespaceFilter(undefined);
+      restore();
+    });
+  });
+
+  describe('namespace tree', () => {
+    it('ALMADAR_LOG_LEVELS sets namespace levels at load', async () => {
+      const { createLogger, restore } = await freshImport({ NODE_ENV: 'production', ALMADAR_LOG_LEVELS: 'almadar:integrations:*=info, almadar:llm=debug' });
+      createLogger('almadar:integrations:calls').info('call');
+      createLogger('almadar:llm').debug('llm-detail');
+      createLogger('almadar:runtime:sm').info('runtime-skipped');
+      expect(spies.info).toHaveBeenCalledTimes(1);
+      expect(spies.info).toHaveBeenCalledWith('[almadar:integrations:calls]', 'call', '');
+      expect(spies.debug).toHaveBeenCalledWith('[almadar:llm]', 'llm-detail', '');
+      restore();
+    });
+
+    it('control: without ALMADAR_LOG_LEVELS production stays at WARN', async () => {
+      const { createLogger, restore } = await freshImport({ NODE_ENV: 'production' });
+      createLogger('almadar:integrations:calls').info('call');
+      expect(spies.info).not.toHaveBeenCalled();
+      restore();
+    });
+
+    it('edge: an entry without a valid level is skipped with a warning, the rest apply', async () => {
+      const { createLogger, getNamespaceLevel, restore } = await freshImport({ NODE_ENV: 'production', ALMADAR_LOG_LEVELS: 'almadar:a=loud,almadar:b,almadar:c=info' });
+      expect(getNamespaceLevel('almadar:a')).toBeUndefined();
+      expect(getNamespaceLevel('almadar:b')).toBeUndefined();
+      expect(getNamespaceLevel('almadar:c')).toBe('INFO');
+      expect(spies.warn).toHaveBeenCalledTimes(2);
+      createLogger('almadar:c').info('c-fires');
+      expect(spies.info).toHaveBeenCalledWith('[almadar:c]', 'c-fires', '');
+      restore();
+    });
+
+    it('the most specific wildcard wins, whatever order they were set in', async () => {
+      for (const order of [['almadar:integrations:*', 'almadar:integrations:knowledge:*'], ['almadar:integrations:knowledge:*', 'almadar:integrations:*']]) {
+        const { createLogger, setNamespaceLevel, restore } = await freshImport({ NODE_ENV: 'production' });
+        for (const pattern of order) setNamespaceLevel(pattern, pattern === 'almadar:integrations:*' ? 'INFO' : 'WARN');
+        createLogger('almadar:integrations:calls').info('call-fires');
+        createLogger('almadar:integrations:knowledge:paths').info('knowledge-skipped');
+        expect(spies.info).toHaveBeenCalledTimes(1);
+        expect(spies.info).toHaveBeenCalledWith('[almadar:integrations:calls]', 'call-fires', '');
+        spies.info.mockClear();
+        restore();
+      }
+    });
+
+    it('an exact level beats every wildcard', async () => {
+      const { createLogger, setNamespaceLevel, restore } = await freshImport({ NODE_ENV: 'production' });
+      setNamespaceLevel('almadar:integrations:knowledge:*', 'WARN');
+      setNamespaceLevel('almadar:integrations:knowledge:paths', 'DEBUG');
+      createLogger('almadar:integrations:knowledge:paths').debug('exact-fires');
+      expect(spies.debug).toHaveBeenCalledWith('[almadar:integrations:knowledge:paths]', 'exact-fires', '');
+      restore();
+    });
+
+    it('getKnownNamespaces lists every logger created, sorted and once', async () => {
+      const { createLogger, getKnownNamespaces, restore } = await freshImport({ NODE_ENV: 'production' });
+      createLogger('almadar:runtime:sm');
+      createLogger('almadar:integrations:calls');
+      createLogger('almadar:runtime:sm');
+      expect(getKnownNamespaces()).toEqual(['almadar:integrations:calls', 'almadar:runtime:sm']);
+      restore();
+    });
+
+    it('getEffectiveLevel resolves exact, then the most specific wildcard, then the global level', async () => {
+      const { getEffectiveLevel, setNamespaceLevel, restore } = await freshImport({ NODE_ENV: 'production' });
+      setNamespaceLevel('almadar:integrations:*', 'INFO');
+      setNamespaceLevel('almadar:integrations:knowledge:paths', 'DEBUG');
+      expect(getEffectiveLevel('almadar:integrations:knowledge:paths')).toBe('DEBUG');
+      expect(getEffectiveLevel('almadar:integrations:calls')).toBe('INFO');
+      expect(getEffectiveLevel('almadar:runtime:sm')).toBe('WARN');
       restore();
     });
   });

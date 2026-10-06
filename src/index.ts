@@ -7,6 +7,8 @@ export {
   setNamespaceLevel,
   getNamespaceLevel,
   getNamespaceLevels,
+  getEffectiveLevel,
+  getKnownNamespaces,
   isLogLevelEnabled,
   configureLogOutput,
   getLogOutput,

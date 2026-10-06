@@ -10,7 +10,9 @@
  *
  * Per-namespace level overrides (`setNamespaceLevel`) compose between
  * layers 1 and 2: a namespace can carry its own minimum priority that
- * takes precedence over the global level.
+ * takes precedence over the global level. They are seeded from
+ * `ALMADAR_LOG_LEVELS="almadar:integrations:*=info,almadar:llm=debug"`;
+ * an exact namespace beats every `prefix:*`, and the longest prefix wins.
  *
  * Data is typed via `LogMeta` from `@almadar/core` — strict, recursive,
  * no `unknown`. The `LogData` alias also accepts a `() => LogMeta` thunk
@@ -61,6 +63,17 @@ const INITIAL_LEVEL = (
 
 let currentLevel: LogLevel = LEVEL_PRIORITY[INITIAL_LEVEL] !== undefined ? INITIAL_LEVEL : 'DEBUG';
 const namespaceLevels = new Map<string, LogLevel>();
+const knownNamespaces = new Set<string>();
+
+for (const entry of (envGet('ALMADAR_LOG_LEVELS') ?? '').split(',').map((s) => s.trim()).filter(Boolean)) {
+  const eq = entry.lastIndexOf('=');
+  const level = (eq > 0 ? entry.slice(eq + 1).trim().toUpperCase() : '') as LogLevel;
+  if (LEVEL_PRIORITY[level] === undefined) {
+    console.warn('[almadar:logger]', `ALMADAR_LOG_LEVELS: skipped "${entry}" (expected <namespace>=debug|info|warn|error)`);
+    continue;
+  }
+  namespaceLevels.set(entry.slice(0, eq).trim(), level);
+}
 
 export function getLogLevel(): LogLevel {
   return currentLevel;
@@ -119,17 +132,31 @@ function namespaceAllowed(namespace: string): boolean {
   return matchesPatterns(namespace, ENV_FILTER);
 }
 
-function effectiveMinPriority(namespace: string): number {
-  // Per-namespace override beats global. Exact match first, then
-  // prefix-wildcard match (`almadar:ui:*` covers `almadar:ui:flow-canvas`).
+function effectiveLevel(namespace: string): LogLevel {
+  // Exact beats every wildcard; among wildcards the longest (most specific) prefix wins.
   const exact = namespaceLevels.get(namespace);
-  if (exact !== undefined) return LEVEL_PRIORITY[exact];
+  if (exact !== undefined) return exact;
+  let best: { prefix: string; level: LogLevel } | undefined;
   for (const [pattern, level] of namespaceLevels) {
-    if (pattern.endsWith(':*') && namespace.startsWith(pattern.slice(0, -1))) {
-      return LEVEL_PRIORITY[level];
-    }
+    if (!pattern.endsWith(':*')) continue;
+    const prefix = pattern.slice(0, -1);
+    if (namespace.startsWith(prefix) && (best === undefined || prefix.length > best.prefix.length)) best = { prefix, level };
   }
-  return LEVEL_PRIORITY[currentLevel];
+  return best?.level ?? currentLevel;
+}
+
+function effectiveMinPriority(namespace: string): number {
+  return LEVEL_PRIORITY[effectiveLevel(namespace)];
+}
+
+/** The lowest level `namespace` fires at: its own level, else the most specific `prefix:*` level, else the global level. */
+export function getEffectiveLevel(namespace: string): LogLevel {
+  return effectiveLevel(namespace);
+}
+
+/** Every namespace a logger has been created for in this process, sorted. */
+export function getKnownNamespaces(): string[] {
+  return [...knownNamespaces].sort();
 }
 
 export function isLogLevelEnabled(level: LogLevel, namespace: string): boolean {
@@ -216,6 +243,7 @@ function emit(level: LogLevel, prefix: string, message: string, payload: LogMeta
 }
 
 export function createLogger(namespace: string): Logger {
+  knownNamespaces.add(namespace);
   const prefix = `[${namespace}]`;
 
   const allowed = (level: LogLevel): boolean =>
